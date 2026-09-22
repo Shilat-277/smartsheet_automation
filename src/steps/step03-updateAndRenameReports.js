@@ -19,13 +19,15 @@ async function run(ctx) {
   );
   const filterFailures = [];
 
+  ctx.reportIds = ctx.reportIds || {};
   ctx.reportIds.updatedReports = [];
 
   for (const report of reportMatches) {
     const reportId = report.id;
     const reportName = report.name;
-    const updatedName = await renameReport({ smartsheet, log, reportId, reportName, ctx });
-    const updatedReport = { beforeId: reportId, beforeName: reportName, afterId: reportId, afterName: updatedName, renamed: updatedName !== reportName, filterUpdated: false };
+    const renameResult = await renameReport({ smartsheet, log, reportId, reportName, ctx });
+    const updatedName = renameResult.name;
+    const updatedReport = { beforeId: reportId, beforeName: reportName, afterId: reportId, afterName: updatedName, renamed: updatedName !== reportName, renameError: renameResult.error, filterUpdated: false };
     ctx.reportIds.updatedReports.push(updatedReport);
 
     try {
@@ -47,6 +49,9 @@ async function run(ctx) {
 
     log.info({ reportId, reportName, updatedName, filterUpdated: updatedReport.filterUpdated }, 'processed report while preserving report ID');
   }
+
+  ctx.reportIds.reportUpdateSummary = buildReportUpdateSummary(ctx.reportIds.updatedReports);
+  log.info(ctx.reportIds.reportUpdateSummary, 'report update summary');
 
   if (filterFailures.length) {
     throw new Error(`Report renames completed, but ${filterFailures.length} filter update(s) failed: ${filterFailures.map((failure) => `${failure.reportName}: ${failure.message}`).join('; ')}`);
@@ -128,16 +133,27 @@ function reportNameMatchesSearch(normalizedName, expected, renamedToken) {
 async function renameReport({ smartsheet, log, reportId, reportName, ctx }) {
   const newName = buildReportName(reportName, ctx);
   if (newName === reportName) {
-    return reportName;
+    return { name: reportName };
   }
 
   try {
     await smartsheet.put(`/reports/${reportId}`, { name: newName });
-    return newName;
+    return { name: newName };
   } catch (error) {
     log.warn({ err: error, reportId, reportName, newName }, 'report rename failed; keeping existing report name');
-    return reportName;
+    return { name: reportName, error: error.message };
   }
+}
+
+function buildReportUpdateSummary(updatedReports) {
+  const reports = updatedReports || [];
+  return {
+    matched: reports.length,
+    renamed: reports.filter((report) => report.renamed).length,
+    renameFailures: reports.filter((report) => report.renameError).length,
+    filtersUpdated: reports.filter((report) => report.filterUpdated).length,
+    filterFailures: reports.filter((report) => report.filterError).length
+  };
 }
 
 function buildReportName(beforeName, ctx) {

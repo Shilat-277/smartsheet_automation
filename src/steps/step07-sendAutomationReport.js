@@ -229,9 +229,14 @@ async function collectResources(ctx, log) {
   add('Source', 'Automation workspace', smartsheetUrls.automationWorkspace, config.smartsheet.zActiveWorkspaceName || 'Configured Smartsheet workspace.');
   add('Destination', 'Project toolkit folder', smartsheetUrls.projectToolkitFolder, 'Destination folder for project Smartsheet artifacts.');
 
+  const reportUpdateSummary = buildReportUpdateSummaryDetails(ctx);
+  if (reportUpdateSummary) {
+    add('Summary', 'Step 3 report updates', smartsheetUrls.projectToolkitFolder, reportUpdateSummary);
+  }
+
   for (const report of ctx.reportIds?.updatedReports || []) {
     const reportId = report.afterId || report.beforeId;
-    add('Destination', report.afterName || report.beforeName || 'Updated report', smartsheetUrls.reports?.[reportId], report.filterError ? `Filter update failed: ${report.filterError}` : 'Report filter updated for this project.');
+    add('Destination', report.afterName || report.beforeName || 'Updated report', smartsheetUrls.reports?.[reportId], buildReportResourceDetails(report));
   }
 
   add('Destination', 'Orders report definition', smartsheetUrls.ordersReport, 'Report that was published for dashboard embedding.');
@@ -244,6 +249,60 @@ async function collectResources(ctx, log) {
   await addOneDrivePathResource({ ctx, log, resources, role: 'Destination', label: 'Client Files destination folder', path: config.oneDrive.clientDestinationPath });
 
   return resources;
+}
+
+function buildReportUpdateSummaryDetails(ctx) {
+  const reports = ctx.reportIds?.updatedReports || [];
+  const summary = ctx.reportIds?.reportUpdateSummary || summarizeReportUpdates(reports);
+  if (!summary.matched) {
+    return '';
+  }
+
+  const parts = [
+    formatCount(summary.matched, 'matching report', 'matching reports'),
+    `${formatCount(summary.filtersUpdated, 'filter update', 'filter updates')} completed`,
+    `${formatCount(summary.filterFailures, 'filter update failure', 'filter update failures')} recorded`
+  ];
+
+  if (summary.renamed || summary.renameFailures) {
+    parts.push(`${formatCount(summary.renamed, 'report rename', 'report renames')} completed`);
+    parts.push(`${formatCount(summary.renameFailures, 'rename fallback', 'rename fallbacks')} used`);
+  }
+
+  return `${parts.join('; ')}.`;
+}
+
+function buildReportResourceDetails(report) {
+  const details = [];
+  if (report.filterError) {
+    details.push(`Filter update failed: ${report.filterError}`);
+  } else if (report.filterUpdated) {
+    details.push('Report filter updated for this project.');
+  } else {
+    details.push('Report matched, but filter update status was not recorded.');
+  }
+
+  if (report.renameError) {
+    details.push(`Rename fallback used; report kept existing name. ${report.renameError}`);
+  } else if (report.renamed) {
+    details.push('Report renamed for this project.');
+  }
+
+  return details.join(' ');
+}
+
+function summarizeReportUpdates(reports) {
+  return {
+    matched: reports.length,
+    renamed: reports.filter((report) => report.renamed).length,
+    renameFailures: reports.filter((report) => report.renameError).length,
+    filtersUpdated: reports.filter((report) => report.filterUpdated).length,
+    filterFailures: reports.filter((report) => report.filterError).length
+  };
+}
+
+function formatCount(count, singular, plural) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 async function resolveSmartsheetUrls({ ctx, log, smartsheet }) {
