@@ -51,25 +51,38 @@ async function run(ctx) {
     attachmentCount: attachments.length
   };
 
-  const contractVerificationAttachments = await prepareContractVerificationAttachments(ctx, log, attachments);
-  await mailGraph.sendMail({
-    fromUserId: config.graph.mailboxUserId,
-    to: CONTRACT_VERIFICATION_EMAILS,
-    subject: `Contract Status : [[ ${contractSubjectStatus(ctx)} ]] ${ctx.projectName} - ${ctx.projectNumber}`,
-    html: buildContractVerificationEmailHtml(ctx),
-    attachments: contractVerificationAttachments
-  });
+  if (shouldSendContractVerificationEmail(ctx)) {
+    const contractVerificationAttachments = await prepareContractVerificationAttachments(ctx, log, attachments);
+    await mailGraph.sendMail({
+      fromUserId: config.graph.mailboxUserId,
+      to: CONTRACT_VERIFICATION_EMAILS,
+      subject: `Contract Status : [[ ${contractSubjectStatus(ctx)} ]] ${ctx.projectName} - ${ctx.projectNumber}`,
+      html: buildContractVerificationEmailHtml(ctx),
+      attachments: contractVerificationAttachments
+    });
 
-  ctx.contractVerificationEmail = {
-    from: config.graph.mailboxUserId,
-    to: CONTRACT_VERIFICATION_EMAILS,
-    sentAt: new Date().toISOString(),
-    attachmentCount: contractVerificationAttachments.length
-  };
+    ctx.contractVerificationEmail = {
+      from: config.graph.mailboxUserId,
+      to: CONTRACT_VERIFICATION_EMAILS,
+      sentAt: new Date().toISOString(),
+      attachmentCount: contractVerificationAttachments.length
+    };
+
+    log.info({ to: CONTRACT_VERIFICATION_EMAILS, attachmentCount: contractVerificationAttachments.length }, 'contract verification email sent');
+  } else {
+    ctx.contractVerificationEmail = {
+      skipped: true,
+      reason: ctx.contract?.reason || 'Contract verification email suppressed'
+    };
+    log.info({ reason: ctx.contractVerificationEmail.reason }, 'contract verification email skipped');
+  }
 
   log.info({ to: config.manualCheckpointOwnerEmail, failedStepCount: recapCounts.failed, manualTaskCount: recapCounts.needs_manual_review }, 'automation report email sent');
-  log.info({ to: CONTRACT_VERIFICATION_EMAILS, attachmentCount: contractVerificationAttachments.length }, 'contract verification email sent');
   return ctx;
+}
+
+function shouldSendContractVerificationEmail(ctx) {
+  return ctx.contract?.skipped !== true;
 }
 
 async function sendFatalErrorReport(ctx) {
@@ -240,8 +253,8 @@ async function collectResources(ctx, log) {
   }
 
   add('Destination', 'Orders report definition', smartsheetUrls.ordersReport, 'Report that was published for dashboard embedding.');
-  add('Destination', 'CAD project folder', ctx.folderUrls?.oneDrive?.cad, 'Created OneDrive CAD folder.');
-  add('Destination', 'Client Files project folder', ctx.folderUrls?.oneDrive?.client, 'Created OneDrive client folder.');
+  add('Destination', 'CAD project folder', ctx.folderUrls?.oneDrive?.cad, buildOneDriveFolderDetails(ctx, 'cad', 'CAD'));
+  add('Destination', 'Client Files project folder', ctx.folderUrls?.oneDrive?.client, buildOneDriveFolderDetails(ctx, 'client', 'Client Files'));
 
   await addOneDrivePathResource({ ctx, log, resources, role: 'Source', label: 'CAD template folder', path: config.oneDrive.cadTemplatePath });
   await addOneDrivePathResource({ ctx, log, resources, role: 'Destination', label: 'CAD destination folder', path: config.oneDrive.cadDestinationPath });
@@ -249,6 +262,19 @@ async function collectResources(ctx, log) {
   await addOneDrivePathResource({ ctx, log, resources, role: 'Destination', label: 'Client Files destination folder', path: config.oneDrive.clientDestinationPath });
 
   return resources;
+}
+
+function buildOneDriveFolderDetails(ctx, key, label) {
+  const result = ctx.oneDriveFolderResults?.[key];
+  if (ctx.folderUrls?.oneDrive?.[key]) {
+    return `Created OneDrive ${label} folder.`;
+  }
+
+  if (result?.status === 'failed') {
+    return `OneDrive ${label} folder creation was not confirmed: ${result.message}`;
+  }
+
+  return `OneDrive ${label} folder creation was not confirmed for this run.`;
 }
 
 function buildReportUpdateSummaryDetails(ctx) {
@@ -517,6 +543,9 @@ function buildContractStatusValue(ctx) {
   if (contract.signed === true) {
     return { label: contract.attachmentName ? `Signed (${contract.attachmentName})` : 'Signed', highlight: true, highlightTone: 'success' };
   }
+  if (contract.skipped) {
+    return { label: contract.reason || 'Skipped', highlight: true, highlightTone: 'neutral' };
+  }
   if (contract.signed === false) {
     return { label: contract.attachmentName ? `Not signed (${contract.attachmentName})` : 'Not signed', highlight: true };
   }
@@ -567,6 +596,8 @@ function buildContractSignedSummary(report) {
   let highlightTone = 'warning';
   if (contract.signed === true) {
     label = 'Yes';
+  } else if (contract.skipped) {
+    label = `Skipped - ${contract.reason || 'contract verification not required'}`;
   } else if (contract.signed === false) {
     label = buildUnsignedContractSummary(contract);
     highlight = true;

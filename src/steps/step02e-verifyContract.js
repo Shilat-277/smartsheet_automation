@@ -13,6 +13,13 @@ const MISSING_CONTRACT_MESSAGE = 'No contract found. No Letter of Agreement atta
 async function run(ctx) {
   const log = childLogger(ctx, 'step02e');
 
+  if (isPatersonProject(ctx)) {
+    const reason = 'Contract verification skipped for Paterson project';
+    ctx.contract = { skipped: true, reason };
+    log.info({ projectType: ctx.projectType, patersonProject: ctx.patersonProject }, reason);
+    return ctx;
+  }
+
   if (config.dryRun) {
     log.info('DRY_RUN enabled; contract verification marked for manual review');
     await markNeedsReview(ctx, 'DRY_RUN enabled');
@@ -142,6 +149,14 @@ function invalidFileTypeMessage(attachment) {
 
 function articleFor(value) {
   return /^[aeiou]/i.test(String(value || '')) ? 'an' : 'a';
+}
+
+function isPatersonProject(ctx) {
+  if (/^(yes|y|true)$/i.test(String(ctx.patersonProject || '').trim())) {
+    return true;
+  }
+
+  return /\bpat{1,2}erson\b/i.test(String(ctx.projectType || ctx.projectVertical || '').trim());
 }
 
 async function resolveAttachmentDownloadUrl(ctx, attachment) {
