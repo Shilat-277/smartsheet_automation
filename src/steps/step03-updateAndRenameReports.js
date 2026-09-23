@@ -93,16 +93,20 @@ async function findRequiredConfiguredReports(smartsheet, projectRootFolder, ctx)
 }
 
 async function findReportsByNameContains(smartsheet, container, token, projectNumber, visitedFolderIds = new Set()) {
+  if (container.id) {
+    visitedFolderIds.add(container.id);
+  }
+
   const expected = normalizeReportSearchText(token);
   const renamedToken = normalizeReportSearchText(projectNumber);
-  const matches = (container.reports || [])
+  const matches = folderReports(container)
     .filter((report) => {
       const name = normalizeReportSearchText(report.name);
       return reportNameMatchesSearch(name, expected, renamedToken);
     })
-    .map((report) => ({ ...report, parentFolderId: container.id }));
+    .map((report) => ({ ...report, parentFolderId: container.id, parentFolderName: container.name }));
 
-  for (const folder of container.folders || []) {
+  for (const folder of childFolders(container)) {
     if (visitedFolderIds.has(folder.id)) {
       continue;
     }
@@ -112,6 +116,14 @@ async function findReportsByNameContains(smartsheet, container, token, projectNu
   }
 
   return matches;
+}
+
+function folderReports(container) {
+  return Array.isArray(container?.reports) ? container.reports : [];
+}
+
+function childFolders(container) {
+  return Array.isArray(container?.folders) ? container.folders : [];
 }
 
 function normalizeReportSearchText(value) {
